@@ -1,0 +1,312 @@
+// --- 1. 상수 및 변수 정의 ---
+const COLS = 10; // 게임 보드 열
+const ROWS = 20; // 게임 보드 행
+const BLOCK_SIZE = 30; // 픽셀 단위 블록 크기
+const VACANT = 'white'; // 빈 공간의 색상
+
+// Canvas 요소 가져오기
+const canvas = document.getElementById('tetris-canvas');
+const ctx = canvas.getContext('2d');
+
+// Canvas 크기 설정
+canvas.width = COLS * BLOCK_SIZE;
+canvas.height = ROWS * BLOCK_SIZE;
+
+// 7가지 테트로미노 형태 (J, L, O, I, S, Z, T)
+const SHAPES = [
+    // [0] Z-블록
+    [[[1, 1, 0], [0, 1, 1], [0, 0, 0]], 'red'],
+    // [1] S-블록
+    [[[0, 1, 1], [1, 1, 0], [0, 0, 0]], 'lime'],
+    // [2] J-블록
+    [[[1, 0, 0], [1, 1, 1], [0, 0, 0]], 'orange'],
+    // [3] L-블록
+    [[[0, 0, 1], [1, 1, 1], [0, 0, 0]], 'blue'],
+    // [4] I-블록
+    [[[0, 0, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]], 'cyan'],
+    // [5] T-블록
+    [[[0, 1, 0], [1, 1, 1], [0, 0, 0]], 'purple'],
+    // [6] O-블록
+    [[[1, 1], [1, 1]], 'yellow']
+];
+
+let board = []; // 게임 보드 상태를 저장할 2차원 배열
+let score = 0;
+let dropStart = Date.now();
+let dropInterval = 1000; // 블록이 1초마다 떨어지도록 설정
+let currentPiece; // 현재 조작 중인 블록 객체
+
+// --- 2. 보드 초기화 및 그리기 함수 ---
+
+// 게임 보드를 VACANT로 채워 초기화
+function initBoard() {
+    for (let r = 0; r < ROWS; r++) {
+        board[r] = [];
+        for (let c = 0; c < COLS; c++) {
+            board[r][c] = VACANT;
+        }
+    }
+}
+
+// 주어진 좌표와 색상으로 캔버스에 사각형을 그리는 함수
+function drawSquare(x, y, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+    ctx.strokeStyle = 'black'; // 블록 경계선
+    ctx.strokeRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+}
+
+// 보드 전체를 그리는 함수
+function drawBoard() {
+    for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+            drawSquare(c, r, board[r][c]);
+        }
+    }
+}
+initBoard();
+drawBoard(); // 초기 보드 1회 그리기
+
+// --- 3. 테트로미노 객체 및 생성 ---
+
+class Piece {
+    constructor(shape, color) {
+        this.shape = shape;
+        this.color = color;
+        // 블록이 생성되는 시작 좌표 (보드 중앙 상단)
+        this.x = 3;
+        this.y = -1; // 보드 위에서 시작
+    }
+
+    // 블록 그리기
+    draw() {
+        this.shape.forEach((row, r) => {
+            row.forEach((value, c) => {
+                if (value) {
+                    drawSquare(this.x + c, this.y + r, this.color);
+                }
+            });
+        });
+    }
+
+    // 블록 지우기 (다음 위치로 이동하기 전에)
+    unDraw() {
+        this.shape.forEach((row, r) => {
+            row.forEach((value, c) => {
+                if (value) {
+                    drawSquare(this.x + c, this.y + r, VACANT);
+                }
+            });
+        });
+    }
+}
+
+// 새로운 블록을 무작위로 생성하는 함수
+function generateNewPiece() {
+    const random = Math.floor(Math.random() * SHAPES.length);
+    const [shape, color] = SHAPES[random];
+    currentPiece = new Piece(shape, color);
+
+    // 새 블록이 생성되자마자 충돌하면 게임 오버
+    if (checkCollision(0, 0, currentPiece.shape)) {
+        gameOver();
+        return false;
+    }
+    return true;
+}
+
+// --- 4. 충돌 감지 로직 ---
+
+/**
+ * 주어진 위치(nx, ny)에 현재 블록이 충돌하는지 확인
+ * @param {number} nx - x축 변화량 (e.g., -1: 왼쪽, 1: 오른쪽)
+ * @param {number} ny - y축 변화량 (e.g., 1: 아래)
+ * @param {Array<Array<number>>} newShape - 확인할 블록의 모양 (회전 시)
+ * @returns {boolean} 충돌 여부
+ */
+function checkCollision(nx, ny, newShape) {
+    for (let r = 0; r < newShape.length; r++) {
+        for (let c = 0; c < newShape[r].length; c++) {
+            // 블록 조각이 없는 부분(0)은 무시
+            if (newShape[r][c] === 0) continue;
+
+            let newX = currentPiece.x + c + nx;
+            let newY = currentPiece.y + r + ny;
+
+            // 1. 벽 또는 바닥과의 충돌 확인
+            if (newX < 0 || newX >= COLS || newY >= ROWS) {
+                return true;
+            }
+            // (주의: newY < 0 인 경우는 블록이 보드 위로 올라가는 경우이므로 무시)
+
+            // 2. 이미 고정된 다른 블록과의 충돌 확인
+            if (newY >= 0 && board[newY][newX] !== VACANT) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// --- 5. 블록 이동 로직 ---
+
+function move(nx, ny) {
+    if (!checkCollision(nx, ny, currentPiece.shape)) {
+        currentPiece.unDraw();
+        currentPiece.x += nx;
+        currentPiece.y += ny;
+        currentPiece.draw();
+        return true;
+    }
+    return false;
+}
+
+function moveDown() {
+    if (!move(0, 1)) {
+        // 아래로 이동 실패 (충돌 발생) -> 블록 고정 및 줄 제거 시도
+        lockPiece();
+        // 새 블록 생성 시도. 실패하면 (false 반환) 게임 오버
+        generateNewPiece();
+    }
+}
+
+function moveLeft() {
+    move(-1, 0);
+}
+
+function moveRight() {
+    move(1, 0);
+}
+
+// --- 6. 블록 회전 로직 ---
+
+function rotate() {
+    // 3x3 행렬 시계 방향 90도 회전 공식
+    // newShape[r][c] = shape[N-1-c][r] (N은 행렬 크기)
+    let N = currentPiece.shape.length;
+    let newShape = Array.from({ length: N }, () => Array(N).fill(0));
+
+    for (let r = 0; r < N; r++) {
+        for (let c = 0; c < N; c++) {
+            newShape[c][N - 1 - r] = currentPiece.shape[r][c];
+        }
+    }
+
+    // 회전 후 충돌 검사
+    if (!checkCollision(0, 0, newShape)) {
+        currentPiece.unDraw();
+        currentPiece.shape = newShape; // 모양 업데이트
+        currentPiece.draw();
+    }
+    // 벽 근처 회전 시 (Kick) 로직은 여기서는 생략
+}
+
+// --- 7. 블록 고정 및 줄 제거 로직 ---
+
+function lockPiece() {
+    currentPiece.shape.forEach((row, r) => {
+        row.forEach((value, c) => {
+            if (value) {
+                // 블록을 보드에 고정 (색상 정보로 채우기)
+                if (currentPiece.y + r >= 0) {
+                    board[currentPiece.y + r][currentPiece.x + c] = currentPiece.color;
+                }
+            }
+        });
+    });
+
+    // 줄 제거 확인 및 점수 계산
+    checkAndClearLines();
+    drawBoard(); // 보드 상태가 바뀌었으므로 다시 그리기
+}
+
+function checkAndClearLines() {
+    let linesCleared = 0;
+    for (let r = 0; r < ROWS; r++) {
+        // 현재 행이 모두 채워졌는지 확인 (모든 열이 VACANT가 아닌지)
+        if (board[r].every(cell => cell !== VACANT)) {
+            linesCleared++;
+            // 꽉 찬 줄 위의 모든 줄을 한 칸씩 아래로 내림
+            for (let y = r; y > 0; y--) {
+                board[y] = board[y - 1];
+            }
+            // 가장 위 줄은 빈 줄로 채움
+            board[0] = Array(COLS).fill(VACANT);
+        }
+    }
+    updateScore(linesCleared);
+}
+
+// --- 8. 점수 계산 로직 ---
+
+function updateScore(lines) {
+    const scores = [0, 100, 300, 500, 800]; // 0줄, 1줄, 2줄, 3줄, 4줄 점수
+    score += scores[lines];
+    document.getElementById('score').innerText = score;
+
+    // 점수에 따라 낙하 속도 증가 (난이도 상승)
+    if (lines > 0) {
+        // dropInterval = Math.max(100, dropInterval - (lines * 20)); // 예시: 속도 증가는 게임 밸런스에 맞게 조절
+    }
+}
+
+// --- 9. 게임 루프 및 게임 오버 ---
+
+function drop() {
+    let now = Date.now();
+    let delta = now - dropStart;
+
+    if (delta > dropInterval) {
+        moveDown();
+        dropStart = Date.now();
+    }
+    // requestAnimationFrame을 사용하여 부드러운 게임 루프 구현
+    if (!isGameOver) {
+        requestAnimationFrame(drop);
+    }
+}
+
+let isGameOver = false;
+function gameOver() {
+    isGameOver = true;
+    cancelAnimationFrame(drop);
+    // 게임 오버 메시지 표시 (alert 또는 HTML 요소 활용)
+    alert(`Game Over! Final Score: ${score}`);
+}
+
+// --- 10. 입력 처리 (키보드 및 모바일 터치) ---
+
+document.addEventListener('keydown', (e) => {
+    if (isGameOver) return;
+    switch (e.key) {
+        case 'ArrowLeft': moveLeft(); break;
+        case 'ArrowRight': moveRight(); break;
+        case 'ArrowDown': moveDown(); break; // 소프트 드롭
+        case 'ArrowUp': rotate(); break; // 회전
+        case ' ': // 스페이스바: 하드 드롭 (즉시 바닥으로 이동)
+            hardDrop();
+            break;
+    }
+});
+
+function hardDrop() {
+    while (move(0, 1)) {
+        // 아래로 계속 이동
+    }
+    // 이동이 멈추면 블록 고정 및 새 블록 생성
+    lockPiece();
+    generateNewPiece();
+}
+
+// 모바일 터치 버튼 이벤트 리스너 연결
+// HTML에 id="btn-left", id="btn-right", id="btn-rotate", id="btn-down", id="btn-hard-drop" 등의 버튼이 있다고 가정
+document.getElementById('btn-left').addEventListener('click', moveLeft);
+document.getElementById('btn-right').addEventListener('click', moveRight);
+document.getElementById('btn-rotate').addEventListener('click', rotate);
+document.getElementById('btn-down').addEventListener('click', moveDown);
+document.getElementById('btn-hard-drop').addEventListener('click', hardDrop);
+
+
+// --- 11. 게임 시작 ---
+generateNewPiece();
+drop(); // 게임 루프 시작
